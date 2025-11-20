@@ -304,7 +304,7 @@ def execute():
             telegram_content = f"【执行结果】\n执行账号总数: {total}\n成功: {success_count}\n失败: {total - success_count}"
             if len(exec_results) >= PUSH_PLUS_MAX:
                 telegram_content += "\n账号数量过多，详细情况请前往 GitHub Actions 中查看"
-             else:
+            else:
                 telegram_content += "\n具体账号执行结果如下:\n"
                 for result in exec_results:
                     telegram_content += f"账号：{desensitize_user_name(result['user'])}，{'成功' if result['success'] else '失败'}, 原因：{result['msg']}\n"
