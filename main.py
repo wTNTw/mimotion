@@ -102,134 +102,91 @@ def push_plus(title, content):
     except:
         print("pushplus推送异常")
 
-
-class MiMotionRunner:
-    def __init__(self, _user, _passwd):
-        self.user_id = None
-        self.device_id = str(uuid.uuid4())
-        user = str(_user)
-        password = str(_passwd)
-        self.invalid = False
-        self.log_str = ""
-        if user == '' or password == '':
-            self.error = "用户名或密码填写有误！"
-            self.invalid = True
-            pass
-        self.password = password
-        if (user.startswith("+86")) or "@" in user:
-            user = user
+# 新增：Telegram 推送函数
+def push_telegram(title, content):
+    """
+    使用 Telegram Bot API 发送消息。CONFIG 中可配置：
+      TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, 可选 TELEGRAM_HOUR, TELEGRAM_MAX
+    """
+    if TELEGRAM_TOKEN is None or TELEGRAM_TOKEN == '' or TELEGRAM_CHAT_ID is None or TELEGRAM_CHAT_ID == '':
+        return
+    # 小时限制（如设置则仅在整点发送）
+    if TELEGRAM_HOUR is not None and str(TELEGRAM_HOUR).isdigit():
+        if time_bj.hour != int(TELEGRAM_HOUR):
+            print(f"当前设置telegram推送整点为：{TELEGRAM_HOUR}, 当前整点为：{time_bj.hour}，跳过推送")
+            return
+    # 限制长度并使用 HTML 格式
+    full_text = f"<b>{title}</b>\n{content}"
+    max_len = 3500
+    if len(full_text) > max_len:
+        full_text = full_text[:max_len-6] + "...(truncated)"
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": full_text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True
+    }
+    try:
+        resp = requests.post(url, data=payload, timeout=10)
+        if resp.status_code == 200:
+            print("telegram 推送完毕")
         else:
-            user = "+86" + user
-        if user.startswith("+86"):
-            self.is_phone = True
-        else:
-            self.is_phone = False
-        self.user = user
-        # self.fake_ip_addr = fake_ip()
-        # self.log_str += f"创建虚拟ip地址：{self.fake_ip_addr}\n"
+            print(f"telegram 推送失败: {resp.status_code} {resp.text}")
+    except Exception as e:
+        print(f"telegram 推送异常: {e}")
 
-    # 登录
-    def login(self):
-        user_token_info = user_tokens.get(self.user)
-        if user_token_info is not None:
-            access_token = user_token_info.get("access_token")
-            login_token = user_token_info.get("login_token")
-            app_token = user_token_info.get("app_token")
-            self.device_id = user_token_info.get("device_id")
-            self.user_id = user_token_info.get("user_id")
-            if self.device_id is None:
-                self.device_id = str(uuid.uuid4())
-                user_token_info["device_id"] = self.device_id
-            ok,msg = zeppHelper.check_app_token(app_token)
-            if ok:
-                self.log_str += "使用加密保存的app_token\n"
-                return app_token
-            else:
-                self.log_str += f"app_token失效 重新获取 last grant time: {user_token_info.get('app_token_time')}\n"
-                # 检查login_token是否可用
-                app_token, msg = zeppHelper.grant_app_token(login_token)
-                if app_token is None:
-                    self.log_str += f"login_token 失效 重新获取 last grant time: {user_token_info.get('login_token_time')}\n"
-                    login_token, app_token, user_id, msg = zeppHelper.grant_login_tokens(access_token, self.device_id, self.is_phone)
-                    if login_token is None:
-                        self.log_str += f"access_token 已失效：{msg} last grant time:{user_token_info.get('access_token_time')}\n"
-                    else:
-                        user_token_info["login_token"] = login_token
-                        user_token_info["app_token"] = app_token
-                        user_token_info["user_id"] = user_id
-                        user_token_info["login_token_time"] = get_time()
-                        user_token_info["app_token_time"] = get_time()
-                        self.user_id = user_id
-                        return app_token
-                else:
-                    self.log_str += "重新获取app_token成功\n"
-                    user_token_info["app_token"] = app_token
-                    user_token_info["app_token_time"] = get_time()
-                    return app_token
-
-        # access_token 失效 或者没有保存加密数据
-        access_token, msg = zeppHelper.login_access_token(self.user, self.password)
-        if access_token is None:
-            self.log_str += "登录获取accessToken失败：%s" % msg
-            return None
-        # print(f"device_id:{self.device_id} isPhone: {self.is_phone}")
-        login_token, app_token, user_id, msg = zeppHelper.grant_login_tokens(access_token, self.device_id, self.is_phone)
-        if login_token is None:
-            self.log_str += f"登录提取的 access_token 无效：{msg}"
-            return None
-
-        user_token_info = dict()
-        user_token_info["access_token"] = access_token
-        user_token_info["login_token"] = login_token
-        user_token_info["app_token"] = app_token
-        user_token_info["user_id"] = user_id
-        # 记录token获取时间
-        user_token_info["access_token_time"] = get_time()
-        user_token_info["login_token_time"] = get_time()
-        user_token_info["app_token_time"] = get_time()
-        if self.device_id is None:
-            self.device_id = uuid.uuid4()
-        user_token_info["device_id"] = self.device_id
-        user_tokens[self.user] = user_token_info
-        return app_token
-
-
-    # 主函数
-    def login_and_post_step(self, min_step, max_step):
-        if self.invalid:
-            return "账号或密码配置有误", False
-        app_token = self.login()
-        if app_token is None:
-            return "登陆失败！", False
-
-        step = str(random.randint(min_step, max_step))
-        self.log_str += f"已设置为随机步数范围({min_step}~{max_step}) 随机值:{step}\n"
-        ok, msg = zeppHelper.post_fake_brand_data(step, app_token, self.user_id)
-        return f"修改步数（{step}）[" + msg + "]", ok
-
-
-# 启动主函数
+# 修改：push_to_push_plus 改为分别处理 pushplus 与 telegram（互不影响）
 def push_to_push_plus(exec_results, summary):
-    # 判断是否需要pushplus推送
+    # pushplus 部分
     if PUSH_PLUS_TOKEN is not None and PUSH_PLUS_TOKEN != '' and PUSH_PLUS_TOKEN != 'NO':
-        if PUSH_PLUS_HOUR is not None and PUSH_PLUS_HOUR.isdigit():
+        if PUSH_PLUS_HOUR is not None and str(PUSH_PLUS_HOUR).isdigit():
             if time_bj.hour != int(PUSH_PLUS_HOUR):
-                print(f"当前设置push_plus推送整点为：{PUSH_PLUS_HOUR}, 当前整点为：{time_bj.hour}，跳过推送")
-                return
-        html = f'<div>{summary}</div>'
-        if len(exec_results) >= PUSH_PLUS_MAX:
-            html += '<div>账号数量过多，详细情况请前往github actions中查看</div>'
-        else:
-            html += '<ul>'
-            for exec_result in exec_results:
-                success = exec_result['success']
-                if success is not None and success is True:
-                    html += f'<li><span>账号：{exec_result["user"]}</span>刷步数成功，接口返回：{exec_result["msg"]}</li>'
+                print(f"当前设置push_plus推送整点为：{PUSH_PLUS_HOUR}, 当前整点为：{time_bj.hour}，跳过 pushplus 推送")
+            else:
+                html = f'<div>{summary}</div>'
+                if len(exec_results) >= PUSH_PLUS_MAX:
+                    html += '<div>账号数量过多，详细情况请前往github actions中查看</div>'
                 else:
-                    html += f'<li><span>账号：{exec_result["user"]}</span>刷步数失败，失败原因：{exec_result["msg"]}</li>'
-            html += '</ul>'
-        push_plus(f"{format_now()} 刷步数通知", html)
+                    html += '<ul>'
+                    for exec_result in exec_results:
+                        success = exec_result['success']
+                        if success is not None and success is True:
+                            html += f'<li><span>账号：{exec_result["user"]}</span>刷步数成功，接口返回：{exec_result["msg"]}</li>'
+                        else:
+                            html += f'<li><span>账号：{exec_result["user"]}</span>刷步数失败，失败原因：{exec_result["msg"]}</li>'
+                    html += '</ul>'
+                push_plus(f"{format_now()} 刷步数通知", html)
+        else:
+            html = f'<div>{summary}</div>'
+            if len(exec_results) >= PUSH_PLUS_MAX:
+                html += '<div>账号数量过多，详细情况请前往github actions中查看</div>'
+            else:
+                html += '<ul>'
+                for exec_result in exec_results:
+                    success = exec_result['success']
+                    if success is not None and success is True:
+                        html += f'<li><span>账号：{exec_result["user"]}</span>刷步数成功，接口返回：{exec_result["msg"]}</li>'
+                    else:
+                        html += f'<li><span>账号：{exec_result["user"]}</span>刷步数失败，失败原因：{exec_result["msg"]}</li>'
+                html += '</ul>'
+            push_plus(f"{format_now()} 刷步数通知", html)
 
+    # telegram 部分（如果配置了则推送）
+    if 'TELEGRAM_TOKEN' in globals() or 'TELEGRAM_CHAT_ID' in globals():
+        # TELEGRAM_TOKEN/TELEGRAM_CHAT_ID 在 __main__ CONFIG 解析时会被赋值，如果未配置则为 None
+        pass
+    if TELEGRAM_TOKEN is not None and TELEGRAM_TOKEN != '' and TELEGRAM_CHAT_ID is not None and TELEGRAM_CHAT_ID != '':
+        text = summary + "\n"
+        if len(exec_results) <= TELEGRAM_MAX:
+            for exec_result in exec_results:
+                if exec_result.get('success'):
+                    text += f"账号：{desensitize_user_name(exec_result['user'])} 成功\n"
+                else:
+                    text += f"账号：{desensitize_user_name(exec_result['user'])} 失败：{exec_result['msg']}\n"
+        else:
+            text += "账号数量过多，详细情况请前往 GitHub Actions 查看。\n"
+        push_telegram(f"{format_now()} 刷步数通知", text)
 
 def run_single_account(total, idx, user_mi, passwd_mi):
     idx_info = ""
@@ -340,6 +297,13 @@ if __name__ == "__main__":
         PUSH_PLUS_TOKEN = config.get('PUSH_PLUS_TOKEN')
         PUSH_PLUS_HOUR = config.get('PUSH_PLUS_HOUR')
         PUSH_PLUS_MAX = get_int_value_default(config, 'PUSH_PLUS_MAX', 30)
+
+        # 新增：Telegram 配置项（可选）
+        TELEGRAM_TOKEN = config.get('TELEGRAM_TOKEN')            # Bot Token，例如：123456:ABC-DEF...
+        TELEGRAM_CHAT_ID = config.get('TELEGRAM_CHAT_ID')        # chat_id 或 @channelusername
+        TELEGRAM_HOUR = config.get('TELEGRAM_HOUR')              # 可选，整点推送限制
+        TELEGRAM_MAX = get_int_value_default(config, 'TELEGRAM_MAX', 30)
+
         sleep_seconds = config.get('SLEEP_GAP')
         if sleep_seconds is None or sleep_seconds == '':
             sleep_seconds = 5
