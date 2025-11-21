@@ -111,6 +111,8 @@ def push_plus(title, content):
 def escape_md_v2(text: str) -> str:
     if text is None:
         return ""
+    # 先转义反斜杠，避免后续转义生成不合法的转义序列
+    text = text.replace("\\", "\\\\")
     for ch in r"_*[]()~`>#+-=|{}.!":
         text = text.replace(ch, "\\" + ch)
     return text
@@ -125,9 +127,8 @@ def push_to_telegram(title, content):
 
     now = format_now()
     escaped_title = escape_md_v2(title)
-
     if isinstance(content, list):
-        escaped_content = "\n".join(escape_md_v2(line) for line in content)
+        escaped_content = "\n".join(content)
     else:
         escaped_content = "\n".join(escape_md_v2(line) for line in str(content).splitlines())
 
