@@ -26,9 +26,18 @@ def get_min_max_by_time(hour=None, minute=None):
     if minute is None:
         minute = time_bj.minute
     time_rate = min((hour * 60 + minute) / (22 * 60), 1)
-    min_step = get_int_value_default(config, 'MIN_STEP', 18000)
-    max_step = get_int_value_default(config, 'MAX_STEP', 25000)
-    return int(time_rate * min_step), int(time_rate * max_step)
+    min_step_conf = get_int_value_default(config, 'MIN_STEP', 18000)
+    max_step_conf = get_int_value_default(config, 'MAX_STEP', 25000)
+    # 按时间比率计算区间
+    calc_min = int(time_rate * min_step_conf)
+    calc_max = int(time_rate * max_step_conf)
+    # 如果 time_rate>0 且 calc_min 为 0，则至少设为 1，避免在非零时间段产生 0 步
+    if time_rate > 0 and calc_min == 0:
+        calc_min = 1
+    # 确保最大值不小于最小值
+    if calc_max < calc_min:
+        calc_max = calc_min
+    return calc_min, calc_max
 
 
 # 虚拟ip地址
@@ -99,26 +108,47 @@ def push_plus(title, content):
         print("pushplus推送异常")
 
 
-# 新增 Telegram 推送函数
+def escape_md_v2(text: str) -> str:
+    if text is None:
+        return ""
+    for ch in r"_*[]()~`>#+-=|{}.!":
+        text = text.replace(ch, "\\" + ch)
+    return text
+
+
 def push_to_telegram(title, content):
-    telegram_token = config.get('TELEGRAM_TOKEN')
-    telegram_chat_id = config.get('TELEGRAM_CHAT_ID')
-    if not (telegram_token and telegram_chat_id):
+    token = globals().get('TELEGRAM_TOKEN') or (config.get('TELEGRAM_TOKEN') if 'config' in globals() else None)
+    chat_id = globals().get('TELEGRAM_CHAT_ID') or (config.get('TELEGRAM_CHAT_ID') if 'config' in globals() else None)
+    if not (token and chat_id):
         print("Telegram 配置不完整，跳过推送")
         return
 
-    requestUrl = f"https://api.telegram.org/bot{telegram_token}/sendMessage"
-    data = {
-        "chat_id": telegram_chat_id,
-        "text": f"【{title}】\n{content}"
+    now = format_now()
+    escaped_title = escape_md_v2(title)
+
+    if isinstance(content, list):
+        escaped_content = "\n".join(content)
+    else:
+        escaped_content = "\n".join(escape_md_v2(line) for line in str(content).splitlines())
+
+    md = f"*{escaped_title}*\n\n"
+    md += f"*时间*: {escape_md_v2(now)}\n\n"
+    md += escaped_content
+
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": md,
+        "parse_mode": "MarkdownV2",
+        "disable_web_page_preview": True
     }
 
     try:
-        response = requests.post(requestUrl, json=data)
-        if response.status_code == 200:
-            print(f"Telegram 推送成功: {response.json()}")
+        resp = requests.post(url, json=payload, timeout=10)
+        if resp.status_code == 200:
+            print("Telegram 推送完毕")
         else:
-            print(f"Telegram 推送失败: {response.status_code} - {response.text}")
+            print(f"Telegram 推送失败: {resp.status_code} {resp.text}")
     except Exception as e:
         print(f"Telegram 推送异常: {e}")
 
@@ -217,11 +247,24 @@ class MiMotionRunner:
         app_token = self.login()
         if app_token is None:
             return "登录失败！", False
-
-        step = str(random.randint(min_step, max_step))
-        self.log_str += f"已设置为随机步数范围({min_step}~{max_step}) 随机值:{step}\n"
-        ok, msg = zeppHelper.post_fake_brand_data(step, app_token, self.user_id)
-        return f"修改步数（{step}）[" + msg + "]", ok
+        last = 0
+        try:
+            last = int(user_tokens.get(self.user, {}).get("last_step", 0) or 0)
+        except:
+            last = 0
+        lower = max(int(min_step), last)
+        if lower > int(max_step):
+            step_val = lower
+        else:
+            step_val = random.randint(int(lower), int(max_step))
+        self.log_str += f"已设置为随机步数范围({min_step}~{max_step})，下限取 max(min_step,last_step)={lower}，最终步数:{step_val}\n"
+        ok, msg = zeppHelper.post_fake_brand_data(str(step_val), app_token, self.user_id)）
+        try:
+            user_token_info = user_tokens.setdefault(self.user, {})
+            user_token_info["last_step"] = int(step_val)
+        except:
+            pass
+        return f"修改步数（{step_val}）[" + msg + "]", ok
 
 
 # 单账号执行逻辑
@@ -385,11 +428,16 @@ if __name__ == "__main__":
         push_to_push_plus(push_results, summary)
 
         if TELEGRAM_TOKEN is not None and TELEGRAM_CHAT_ID is not None:
-            telegram_content = f"【执行结果】\n执行账号总数: {total}\n成功: {success_count}\n失败: {total - success_count}"
+            lines = []
+            lines.append("*步数增加-执行摘要*")
+            lines.append(f"- 总计：{total}    成功：{success_count}    失败：{total - success_count}")
             if len(exec_results) >= PUSH_PLUS_MAX:
-                telegram_content += "\n账号数量过多，详细情况请前往 GitHub Actions 中查看"
+                lines.append("\n账号数量过多，详细情况请前往 GitHub Actions 中查看")
             else:
-                telegram_content += "\n具体账号执行结果如下:\n"
+                lines.append("\n*详细结果*")
                 for result in exec_results:
-                    telegram_content += f"账号：{desensitize_user_name(result['user'])}，{'成功' if result['success'] else '失败'}, 原因：{result['msg']}\n"
-            push_to_telegram("刷步数通知", telegram_content)
+                    user_esc = escape_md_v2(desensitize_user_name(result['user']))
+                    reason_esc = escape_md_v2(result['msg'])
+                    status = "✅ 成功" if result['success'] else "❌ 失败"
+                    lines.append(f"- *{user_esc}* — {status} — {reason_esc}")
+            push_to_telegram("步数通知", lines)
