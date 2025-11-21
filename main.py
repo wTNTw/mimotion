@@ -118,32 +118,28 @@ def escape_md_v2(text: str) -> str:
     return text
 
 
-def push_to_telegram(title, content):
-    token = globals().get('TELEGRAM_TOKEN') or (config.get('TELEGRAM_TOKEN') if 'config' in globals() else None)
-    chat_id = globals().get('TELEGRAM_CHAT_ID') or (config.get('TELEGRAM_CHAT_ID') if 'config' in globals() else None)
-    if not (token and chat_id):
+def push_to_telegram(title: str, content_lines: list):
+    global TELEGRAM_TOKEN, TELEGRAM_CHAT_ID
+    if not (TELEGRAM_TOKEN and TELEGRAM_CHAT_ID):
         print("Telegram 配置不完整，跳过推送")
         return
-
     now = format_now()
-    escaped_title = escape_md_v2(title)
-    if isinstance(content, list):
-        escaped_content = "\n".join(content)
-    else:
-        escaped_content = "\n".join(escape_md_v2(line) for line in str(content).splitlines())
-
-    md = f"*{escaped_title}*\n\n"
-    md += f"*时间*: {escape_md_v2(now)}\n\n"
-    md += escaped_content
-
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    md_messages = [
+        f"*{escape_md_v2(title)}*", # 标题
+        "", # 空行
+        f"*时间*: {escape_md_v2(now)}", # 时间
+        "" # 空行
+    ]
+    # 添加具体内容行，这些行在调用前已经被适当转义了
+    md_messages.extend(content_lines) # 直接添加已转义的行内容
+    md = "\n".join(md_messages)
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage" # 使用全局变量
     payload = {
-        "chat_id": chat_id,
+        "chat_id": TELEGRAM_CHAT_ID, # 使用全局变量
         "text": md,
         "parse_mode": "MarkdownV2",
         "disable_web_page_preview": True
     }
-
     try:
         resp = requests.post(url, json=payload, timeout=10)
         if resp.status_code == 200:
@@ -427,18 +423,18 @@ if __name__ == "__main__":
 
         # 推送 PushPlus 及 Telegram
         push_to_push_plus(push_results, summary)
-
         if TELEGRAM_TOKEN is not None and TELEGRAM_CHAT_ID is not None:
-            lines = []
-            lines.append("*步数增加-执行摘要*")
-            lines.append(f"- 总计：{total}    成功：{success_count}    失败：{total - success_count}")
+            telegram_lines_to_send = []
+            telegram_lines_to_send.append(escape_md_v2("步数增加-执行摘要"))
+            telegram_lines_to_send.append(escape_md_v2(f"- 总计：{total}    成功：{success_count}    失败：{total - success_count}")) # 转义整行
+            
             if len(exec_results) >= PUSH_PLUS_MAX:
-                lines.append("\n账号数量过多，详细情况请前往 GitHub Actions 中查看")
+                telegram_lines_to_send.append(escape_md_v2("\n账号数量过多，详细情况请前往 GitHub Actions 中查看"))
             else:
-                lines.append("\n*详细结果*")
+                telegram_lines_to_send.append(escape_md_v2("\n*详细结果*"))
                 for result in exec_results:
                     user_esc = escape_md_v2(desensitize_user_name(result['user']))
-                    reason_esc = escape_md_v2(result['msg'])
-                    status = "✅ 成功" if result['success'] else "❌ 失败"
-                    lines.append(f"- *{user_esc}* — {status} — {reason_esc}")
-            push_to_telegram("步数通知", lines)
+                    reason_esc = escape_md_v2(result['msg']) 
+                    status_text = "✅ 成功" if result['success'] else "❌ 失败"
+                    telegram_lines_to_send.append(f"- *{user_esc}* — {escape_md_v2(status_text)} — {reason_esc}") 
+            push_to_telegram("步数通知", telegram_lines_to_send)
