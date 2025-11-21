@@ -258,7 +258,7 @@ class MiMotionRunner:
         else:
             step_val = random.randint(int(lower), int(max_step))
         self.log_str += f"已设置为随机步数范围({min_step}~{max_step})，下限取 max(min_step,last_step)={lower}，最终步数:{step_val}\n"
-        ok, msg = zeppHelper.post_fake_brand_data(str(step_val), app_token, self.user_id)）
+        ok, msg = zeppHelper.post_fake_brand_data(str(step_val), app_token, self.user_id)
         try:
             user_token_info = user_tokens.setdefault(self.user, {})
             user_token_info["last_step"] = int(step_val)
