@@ -127,7 +127,7 @@ def push_to_telegram(title, content):
     escaped_title = escape_md_v2(title)
 
     if isinstance(content, list):
-        escaped_content = "\n".join(content)
+        escaped_content = "\n".join(escape_md_v2(line) for line in content)
     else:
         escaped_content = "\n".join(escape_md_v2(line) for line in str(content).splitlines())
 
