@@ -108,13 +108,17 @@ def push_plus(title, content):
         print("pushplus推送异常")
 
 
-def escape_md_v2(text: str) -> str:
+# 针对 HTML parse_mode 的转义函数
+def escape_html(text: str) -> str:
     if text is None:
         return ""
-    # 先转义反斜杠，避免后续转义生成不合法的转义序列
-    text = text.replace("\\", "\\\\")
-    for ch in r"_*[]()~`>#+-=|{}.!":
-        text = text.replace(ch, "\\" + ch)
+    # 对 HTML 特殊字符进行转义
+    # 仅需转义 < > & " '
+    text = text.replace("&", "&amp;")
+    text = text.replace("<", "&lt;")
+    text = text.replace(">", "&gt;")
+    text = text.replace('"', "&quot;")
+    text = text.replace("'", "&#39;") # 或 &apos; 但部分旧浏览器可能不支持，&#39;更通用
     return text
 
 
@@ -124,22 +128,27 @@ def push_to_telegram(title: str, content_lines: list):
         print("Telegram 配置不完整，跳过推送")
         return
     now = format_now()
-    md_messages = [
-        f"*{escape_md_v2(title)}*", # 标题
-        "", # 空行
-        f"*时间*: {escape_md_v2(now)}", # 时间
-        "" # 空行
-    ]
-    # 添加具体内容行，这些行在调用前已经被适当转义了
-    md_messages.extend(content_lines) # 直接添加已转义的行内容
-    md = "\n".join(md_messages)
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage" # 使用全局变量
+    
+    # 构造 HTML 消息
+    # 头部信息，包括标题和时间
+    html_messages = []
+    html_messages.append(f"<b>{escape_html(title)}</b>\n") # 标题加粗
+    html_messages.append(f"<b>时间</b>: {escape_html(now)}\n") # 时间加粗
+    
+    # 添加具体内容行，这些行在调用前已经被适当转义并处理成 HTML 格式
+    # 由于是列表，可以使用 <pre> 或直接换行
+    html_messages.extend(content_lines)
+    
+    html_text = "\n".join(html_messages) # 将所有行连接成一个大字符串
+    
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
-        "chat_id": TELEGRAM_CHAT_ID, # 使用全局变量
-        "text": md,
-        "parse_mode": "MarkdownV2",
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": html_text,
+        "parse_mode": "HTML", # <--- 这里改为 HTML
         "disable_web_page_preview": True
     }
+    
     try:
         resp = requests.post(url, json=payload, timeout=10)
         if resp.status_code == 200:
@@ -425,16 +434,19 @@ if __name__ == "__main__":
         push_to_push_plus(push_results, summary)
         if TELEGRAM_TOKEN is not None and TELEGRAM_CHAT_ID is not None:
             telegram_lines_to_send = []
-            telegram_lines_to_send.append(escape_md_v2("步数增加-执行摘要"))
-            telegram_lines_to_send.append(escape_md_v2(f"- 总计：{total}    成功：{success_count}    失败：{total - success_count}")) # 转义整行
+            
+            telegram_lines_to_send.append(f"<b>{escape_html('步数增加-执行摘要')}</b>\n")
+            telegram_lines_to_send.append(f"<b>总计</b>: {escape_html(str(total))} | <b>成功</b>: {escape_html(str(success_count))} | <b>失败</b>: {escape_html(str(total - success_count))}\n")
             
             if len(exec_results) >= PUSH_PLUS_MAX:
-                telegram_lines_to_send.append(escape_md_v2("\n账号数量过多，详细情况请前往 GitHub Actions 中查看"))
+                telegram_lines_to_send.append(escape_html("账号数量过多，详细情况请前往 GitHub Actions 中查看\n"))
             else:
-                telegram_lines_to_send.append(escape_md_v2("\n*详细结果*"))
+                telegram_lines_to_send.append(f"<b>{escape_html('详细结果')}</b>\n")
                 for result in exec_results:
-                    user_esc = escape_md_v2(desensitize_user_name(result['user']))
-                    reason_esc = escape_md_v2(result['msg']) 
-                    status_text = "✅ 成功" if result['success'] else "❌ 失败"
-                    telegram_lines_to_send.append(f"- *{user_esc}* — {escape_md_v2(status_text)} — {reason_esc}") 
+                    user_esc = escape_html(desensitize_user_name(result['user']))
+                    reason_esc = escape_html(result['msg']) 
+                    status_emoji = "✅" if result['success'] else "❌"
+                    telegram_lines_to_send.append(
+                        f"{status_emoji} <b>账号</b>: {user_esc} -> {reason_esc}\n"
+                    )
             push_to_telegram("步数通知", telegram_lines_to_send)
