@@ -344,6 +344,38 @@ def persist_user_tokens():
         f.close()
 
 
+def reset_daily_steps(user_tokens: dict, reset_hour: int = 6, window_minutes: int = 5):
+	"""
+	在北京时间 reset_hour 小时内（0..window_minutes-1 分钟）将 user_tokens 中每个账号的 last_step 重置为 0。
+	如果 encrypt_support 为 True，会在重置后持久化保存。
+	"""
+	try:
+		# 使用全局 time_bj 和 encrypt_support、persist_user_tokens
+		global time_bj, encrypt_support
+		if time_bj.hour == int(reset_hour) and time_bj.minute < int(window_minutes):
+			changed = False
+			for user, info in user_tokens.items():
+				try:
+					if info.get("last_step", 0) != 0:
+						info["last_step"] = 0
+						changed = True
+				except:
+					user_tokens[user] = {"last_step": 0}
+					changed = True
+			if changed:
+				print(f"已在北京时间 {reset_hour} 点窗口（{window_minutes} 分钟）内，将所有账号 last_step 重置为 0")
+				if encrypt_support:
+					try:
+						persist_user_tokens()
+						print("重置后已持久化加密 token 数据")
+					except Exception as e:
+						print(f"持久化 token 失败: {e}")
+			else:
+				print("重置检查：所有账号 last_step 已为 0，无需重置")
+	except Exception as e:
+		print(f"执行 reset_daily_steps 异常: {e}")
+
+
 if __name__ == "__main__":
     # 北京时间
     time_bj = get_beijing_time()
@@ -372,6 +404,7 @@ if __name__ == "__main__":
             traceback.print_exc()
             exit(1)
 
+
         # 配置变量
         PUSH_PLUS_TOKEN = config.get('PUSH_PLUS_TOKEN')
         PUSH_PLUS_HOUR = config.get('PUSH_PLUS_HOUR')
@@ -397,6 +430,9 @@ if __name__ == "__main__":
         # 从配置中读取 Telegram 相关参数
         TELEGRAM_TOKEN = config.get('TELEGRAM_TOKEN')
         TELEGRAM_CHAT_ID = config.get('TELEGRAM_CHAT_ID')
+
+        # 在开始计算步数范围并执行前，尝试按配置在指定北京时间时段重置 last_step 为 0
+        reset_daily_steps(user_tokens)
 
         # endregion
 
