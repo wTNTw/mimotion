@@ -108,17 +108,14 @@ def push_plus(title, content):
         print("pushplus推送异常")
 
 
-# 针对 HTML parse_mode 的转义函数
 def escape_html(text: str) -> str:
     if text is None:
         return ""
-    # 对 HTML 特殊字符进行转义
-    # 仅需转义 < > & " '
     text = text.replace("&", "&amp;")
     text = text.replace("<", "&lt;")
     text = text.replace(">", "&gt;")
     text = text.replace('"', "&quot;")
-    text = text.replace("'", "&#39;") # 或 &apos; 但部分旧浏览器可能不支持，&#39;更通用
+    text = text.replace("'", "&#39;")
     return text
 
 
@@ -129,23 +126,17 @@ def push_to_telegram(title: str, content_lines: list):
         return
     now = format_now()
     
-    # 构造 HTML 消息
-    # 头部信息，包括标题和时间
     html_messages = []
-    html_messages.append(f"<b>{escape_html(title)}</b>\n") # 标题加粗
-    html_messages.append(f"<b>时间</b>: {escape_html(now)}\n") # 时间加粗
-    
-    # 添加具体内容行，这些行在调用前已经被适当转义并处理成 HTML 格式
-    # 由于是列表，可以使用 <pre> 或直接换行
-    html_messages.extend(content_lines)
-    
-    html_text = "\n".join(html_messages) # 将所有行连接成一个大字符串
+    html_messages.append(f"<b>{escape_html(title)}</b>\n")
+    html_messages.append(f"<b>时间</b>: {escape_html(now)}\n")
+    html_messages.extend(content_lines)  
+    html_text = "\n".join(html_messages)
     
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
         "text": html_text,
-        "parse_mode": "HTML", # <--- 这里改为 HTML
+        "parse_mode": "HTML",
         "disable_web_page_preview": True
     }
     
@@ -344,26 +335,28 @@ def persist_user_tokens():
         f.close()
 
 
-def reset_daily_steps(user_tokens: dict, reset_hour: int = 6, window_minutes: int = 5):
-	"""
-	在北京时间 reset_hour 小时内（0..window_minutes-1 分钟）将 user_tokens 中每个账号的 last_step 重置为 0。
-	如果 encrypt_support 为 True，会在重置后持久化保存。
-	"""
+def reset_daily_steps(user_tokens: dict, reset_hour_start: int = 6, reset_hour_end: int = 8):
 	try:
-		# 使用全局 time_bj 和 encrypt_support、persist_user_tokens
 		global time_bj, encrypt_support
-		if time_bj.hour == int(reset_hour) and time_bj.minute < int(window_minutes):
+		if reset_hour_start <= time_bj.hour < reset_hour_end:
 			changed = False
+			current_date_str = time_bj.strftime("%Y-%m-%d")
+
 			for user, info in user_tokens.items():
-				try:
-					if info.get("last_step", 0) != 0:
-						info["last_step"] = 0
+				last_reset_date = info.get("last_reset_date")
+				
+				if last_reset_date != current_date_str:
+					try:
+						if info.get("last_step", 0) != 0 or last_reset_date != current_date_str:
+							info["last_step"] = 0
+							info["last_reset_date"] = current_date_str
+							changed = True
+					except:
+						user_tokens[user] = {"last_step": 0, "last_reset_date": current_date_str}
 						changed = True
-				except:
-					user_tokens[user] = {"last_step": 0}
-					changed = True
+						
 			if changed:
-				print(f"已在北京时间 {reset_hour} 点窗口（{window_minutes} 分钟）内，将所有账号 last_step 重置为 0")
+				print(f"已在北京时间 {reset_hour_start} 点至 {reset_hour_end-1} 点范围内，将部分/所有账号 last_step 重置为 0")
 				if encrypt_support:
 					try:
 						persist_user_tokens()
@@ -371,7 +364,10 @@ def reset_daily_steps(user_tokens: dict, reset_hour: int = 6, window_minutes: in
 					except Exception as e:
 						print(f"持久化 token 失败: {e}")
 			else:
-				print("重置检查：所有账号 last_step 已为 0，无需重置")
+				print("重置检查：所有账号 last_step 已为 0 或今天已重置，无需操作")
+		else:
+			print(f"当前时间 {time_bj.strftime('%H:%M')} 不在重置窗口 ({reset_hour_start}点 - {reset_hour_end}点) 内，跳过重置检查。")
+
 	except Exception as e:
 		print(f"执行 reset_daily_steps 异常: {e}")
 
