@@ -335,41 +335,46 @@ def persist_user_tokens():
         f.close()
 
 
-def reset_daily_steps(user_tokens: dict, reset_hour_start: int = 6, reset_hour_end: int = 8):
-	try:
-		global time_bj, encrypt_support
-		if reset_hour_start <= time_bj.hour < reset_hour_end:
-			changed = False
-			current_date_str = time_bj.strftime("%Y-%m-%d")
+def reset_daily_steps(user_tokens: dict, log_reset_hour: int = 6, log_reset_window_end_hour: int = 8):
+    try:
+        global time_bj, encrypt_support
+        changed = False
+        current_date_str = time_bj.strftime("%Y-%m-%d")
+        is_in_log_window = log_reset_hour <= time_bj.hour < log_reset_window_end_hour 
 
-			for user, info in user_tokens.items():
-				last_reset_date = info.get("last_reset_date")
-				
-				if last_reset_date != current_date_str:
-					try:
-						if info.get("last_step", 0) != 0 or last_reset_date != current_date_str:
-							info["last_step"] = 0
-							info["last_reset_date"] = current_date_str
-							changed = True
-					except:
-						user_tokens[user] = {"last_step": 0, "last_reset_date": current_date_str}
-						changed = True
-						
-			if changed:
-				print(f"已在北京时间 {reset_hour_start} 点至 {reset_hour_end-1} 点范围内，将部分/所有账号 last_step 重置为 0")
-				if encrypt_support:
-					try:
-						persist_user_tokens()
-						print("重置后已持久化加密 token 数据")
-					except Exception as e:
-						print(f"持久化 token 失败: {e}")
-			else:
-				print("重置检查：所有账号 last_step 已为 0 或今天已重置，无需操作")
-		else:
-			print(f"当前时间 {time_bj.strftime('%H:%M')} 不在重置窗口 ({reset_hour_start}点 - {reset_hour_end}点) 内，跳过重置检查。")
+        for user, info in user_tokens.items():
+            last_reset_date = info.get("last_reset_date")
+            
+            if last_reset_date != current_date_str:
+                needs_reset = (info.get("last_step", 0) != 0) or (last_reset_date is None) 
+                try:
+                    info["last_step"] = 0 
+                    info["last_reset_date"] = current_date_str
+                    changed = True
+                except:
+                    user_tokens[user] = {"last_step": 0, "last_reset_date": current_date_str}
+                    changed = True
 
-	except Exception as e:
-		print(f"执行 reset_daily_steps 异常: {e}")
+        if changed:
+            if is_in_log_window:
+                print(f"[{time_bj.strftime('%H:%M')}] 已在北京时间 {log_reset_hour} 点至 {log_reset_window_end_hour-1} 点范围内，对部分/所有账号进行日重置（last_step设为0，并更新重置日期）。")
+            else:
+                print(f"[{time_bj.strftime('%H:%M')}] 已对部分/所有账号在当日首次运行中进行日重置（last_step设为0，并更新重置日期）。")
+
+            if encrypt_support:
+                try:
+                    persist_user_tokens()
+                    print("重置后已持久化加密 token 数据")
+                except Exception as e:
+                    print(f"持久化 token 失败: {e}")
+        else:
+            if is_in_log_window:
+                print(f"[{time_bj.strftime('%H:%M')}] 重置检查：所有账号 last_step 已为 0 且今日已重置，或当前已在重置窗口内但无需操作。")
+            else:
+                print(f"[{time_bj.strftime('%H:%M')}] 重置检查：今日已重置过，无需再次操作。")
+
+    except Exception as e:
+        print(f"执行 reset_daily_steps 异常: {e}")
 
 
 if __name__ == "__main__":
@@ -423,11 +428,9 @@ if __name__ == "__main__":
             print(f"多账号执行间隔：{sleep_seconds}")
             use_concurrent = False
 
-        # 从配置中读取 Telegram 相关参数
         TELEGRAM_TOKEN = config.get('TELEGRAM_TOKEN')
         TELEGRAM_CHAT_ID = config.get('TELEGRAM_CHAT_ID')
 
-        # 在开始计算步数范围并执行前，尝试按配置在指定北京时间时段重置 last_step 为 0
         reset_daily_steps(user_tokens)
 
         # endregion
