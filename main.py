@@ -244,18 +244,35 @@ class MiMotionRunner:
         app_token = self.login()
         if app_token is None:
             return "登录失败！", False
+        
         last = 0
         try:
             last = int(user_tokens.get(self.user, {}).get("last_step", 0) or 0)
         except:
             last = 0
+
+        current_date_str = get_beijing_time().strftime("%Y-%m-%d")
+        has_been_reset_today = user_tokens.get(self.user, {}).get("last_reset_date") == current_date_str
+
+        if has_been_reset_today and last == 0:
+            self.log_str += f"注意：账号在今日首次执行且 last_step 为 0，不进行步数更新。步数将维持 0。\n"
+            try:
+                user_token_info = user_tokens.setdefault(self.user, {})
+                user_token_info["last_step"] = 0
+            except:
+                pass
+            return "今天首次执行且步数为0，不进行步数增长", True
+        
         lower = max(int(min_step), last)
         if lower > int(max_step):
             step_val = lower
         else:
             step_val = random.randint(int(lower), int(max_step))
+        
         self.log_str += f"已设置为随机步数范围({min_step}~{max_step})，下限取 max(min_step,last_step)={lower}，最终步数:{step_val}\n"
+        
         ok, msg = zeppHelper.post_fake_brand_data(str(step_val), app_token, self.user_id)
+        
         try:
             user_token_info = user_tokens.setdefault(self.user, {})
             user_token_info["last_step"] = int(step_val)
