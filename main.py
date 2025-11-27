@@ -1,4 +1,3 @@
-# -*- coding: utf8 -*-
 import math
 import traceback
 from datetime import datetime
@@ -13,10 +12,16 @@ import requests
 from util.aes_help import encrypt_data, decrypt_data
 import util.zepp_helper as zeppHelper
 
-# 获取默认值转int
+# 获取默认值转int:
 def get_int_value_default(_config: dict, _key, default):
     _config.setdefault(_key, default)
-    return int(_config.get(_key))
+    try:
+        val = _config.get(_key)
+        if val is None:
+            return default
+        return int(val)
+    except (ValueError, TypeError):
+        return default
 
 
 # 获取当前时间对应的最大和最小步数
@@ -47,6 +52,8 @@ def fake_ip():
 
 # 账号脱敏
 def desensitize_user_name(user):
+    if user is None:
+        return ""
     if len(user) <= 8:
         ln = max(math.floor(len(user) / 3), 1)
         return f'{user[:ln]}***{user[-ln:]}'
@@ -98,14 +105,14 @@ def push_plus(title, content):
         "channel": "wechat"
     }
     try:
-        response = requests.post(requestUrl, data=data)
+        response = requests.post(requestUrl, data=data, timeout=10)
         if response.status_code == 200:
             json_res = response.json()
             print(f"pushplus推送完毕：{json_res['code']}-{json_res['msg']}")
         else:
             print(f"pushplus推送失败，状态码：{response.status_code}")
-    except:
-        print("pushplus推送异常")
+    except Exception as e:
+        print(f"pushplus推送异常: {e}")
 
 
 def escape_html(text: str) -> str:
@@ -172,8 +179,8 @@ class MiMotionRunner:
         else:
             self.is_phone = False
         self.user = user
-        # self.fake_ip_addr = fake_ip()
-        # self.log_str += f"创建虚拟ip地址：{self.fake_ip_addr}\n"
+        self.fake_ip_addr = fake_ip()
+        self.log_str += f"创建虚拟ip地址：{self.fake_ip_addr}\n"
 
     # 登录
     def login(self):
@@ -210,13 +217,11 @@ class MiMotionRunner:
                         self.user_id = user_id
                         return app_token
 
-        # access_token 失效 或者没有保存加密数据
         access_token, msg = zeppHelper.login_access_token(self.user, self.password)
         if access_token is None:
             self.log_str += "登录获取accessToken失败：%s" % msg
             return None
 
-        # print(f"device_id:{self.device_id} isPhone: {self.is_phone}")
         login_token, app_token, user_id, msg = zeppHelper.grant_login_tokens(access_token, self.device_id, self.is_phone)
         if login_token is None:
             self.log_str += f"登录提取的 access_token 无效：{msg}"
@@ -244,11 +249,13 @@ class MiMotionRunner:
         app_token = self.login()
         if app_token is None:
             return "登录失败！", False       
+        
         last = 0
         try:
             last = int(user_tokens.get(self.user, {}).get("last_step", 0) or 0)
-        except:
+        except (ValueError, TypeError):
             last = 0
+        
         effective_lower = last
         if effective_lower == 0:
             initial_submit_min_step = get_int_value_default(config, 'INITIAL_SUBMIT_MIN_STEP', 100)
@@ -256,6 +263,7 @@ class MiMotionRunner:
                 initial_submit_min_step = 100 
             effective_lower = initial_submit_min_step
             self.log_str += f"注意：发现 last_step 为 0，已将首次提交的最低步数提升到 {effective_lower} (可配置 INITIAL_SUBMIT_MIN_STEP)。\n"
+        
         lower = max(int(min_step), effective_lower)
         
         if lower > int(max_step):
@@ -263,33 +271,16 @@ class MiMotionRunner:
         else:
             step_val = random.randint(int(lower), int(max_step))
         
-        self.log_str += f"已设置为随机步数范围({min_step}~{max_step})，下限取 max(min_step,last_step)={last}，修正后实际计算下限：{lower}，最终步数:{step_val}\n"      
-        ok, msg = zeppHelper.post_fake_brand_data(str(step_val), app_token, self.user_id)
-        
-        try:
-            user_token_info = user_tokens.setdefault(self.user, {})
-            user_token_info["last_step"] = int(step_val)
-        except:
-            pass
-        return f"修改步数（{step_val}）[" + msg + "]", ok
-
-
-        
-        lower = max(int(min_step), last)
-        if lower > int(max_step):
-            step_val = lower
-        else:
-            step_val = random.randint(int(lower), int(max_step))
-        
-        self.log_str += f"已设置为随机步数范围({min_step}~{max_step})，下限取 max(min_step,last_step)={lower}，最终步数:{step_val}\n"
+        self.log_str += f"已设置为随机步数范围({min_step}~{max_step})，下限取 max(min_step_config,{desensitize_user_name(self.user)}_last_step)={last}，修正后实际计算下限：{lower}，最终步数:{step_val}\n"      
         
         ok, msg = zeppHelper.post_fake_brand_data(str(step_val), app_token, self.user_id)
         
         try:
             user_token_info = user_tokens.setdefault(self.user, {})
             user_token_info["last_step"] = int(step_val)
-        except:
-            pass
+        except Exception as e:
+            self.log_str += f"更新 last_step 失败: {e}\n"
+        
         return f"修改步数（{step_val}）[" + msg + "]", ok
 
 
@@ -306,36 +297,34 @@ def run_single_account(total, idx, user_mi, passwd_mi):
         log_str += f'{exec_msg}\n'
         exec_result = {"user": user_mi, "success": success,
                        "msg": exec_msg}
-    except:
+    except Exception as e:
         log_str += f"执行异常:{traceback.format_exc()}\n"
-        log_str += traceback.format_exc()
         exec_result = {"user": user_mi, "success": False,
                        "msg": f"执行异常:{traceback.format_exc()}"}
     print(log_str)
     return exec_result
 
 
-# 推送 PushPlus（保留）
+# 推送 PushPlus
 def push_to_push_plus(exec_results, summary):
-    # 判断是否需要pushplus推送
-    if PUSH_PLUS_TOKEN is not None and PUSH_PLUS_TOKEN != '' and PUSH_PLUS_TOKEN != 'NO':
-        if PUSH_PLUS_HOUR is not None and PUSH_PLUS_HOUR.isdigit():
-            if time_bj.hour != int(PUSH_PLUS_HOUR):
-                print(f"当前设置push_plus推送整点为：{PUSH_PLUS_HOUR}, 当前整点为：{time_bj.hour}，跳过推送")
-                return
-        html = f'<div>{summary}</div>'
-        if len(exec_results) >= PUSH_PLUS_MAX:
-            html += '<div>账号数量过多，详细情况请前往github actions中查看</div>'
-        else:
-            html += '<ul>'
-            for exec_result in exec_results:
-                success = exec_result['success']
-                if success is not None and success is True:
-                    html += f'<li><span>账号：{exec_result["user"]}</span>刷步数成功，接口返回：{exec_result["msg"]}</li>'
-                else:
-                    html += f'<li><span>账号：{exec_result["user"]}</span>刷步数失败，失败原因：{exec_result["msg"]}</li>'
-            html += '</ul>'
-        push_plus(f"{format_now()} 刷步数通知", html)
+    global PUSH_PLUS_TOKEN, PUSH_PLUS_MAX
+    if not (PUSH_PLUS_TOKEN and PUSH_PLUS_TOKEN != '' and PUSH_PLUS_TOKEN != 'NO'):
+        print("PushPlus 配置不完整，跳过推送")
+        return
+    
+    html = f'<div>{summary}</div>'
+    if len(exec_results) >= PUSH_PLUS_MAX:
+        html += '<div>账号数量过多，详细情况请前往github actions中查看</div>'
+    else:
+        html += '<ul>'
+        for exec_result in exec_results:
+            success = exec_result['success']
+            if success:
+                html += f'<li><span>账号：{escape_html(exec_result["user"])}</span>刷步数成功，接口返回：{escape_html(exec_result["msg"])}</li>'
+            else:
+                html += f'<li><span>账号：{escape_html(exec_result["user"])}</span>刷步数失败，失败原因：{escape_html(exec_result["msg"])}</li>'
+        html += '</ul>'
+    push_plus(f"{format_now()} 刷步数通知", html)
 
 
 def prepare_user_tokens() -> dict:
@@ -345,10 +334,9 @@ def prepare_user_tokens() -> dict:
             data = f.read()
         try:
             decrypted_data = decrypt_data(data, aes_key, None)
-            # 假设原始明文为 UTF-8 编码文本
             return json.loads(decrypted_data.decode('utf-8', errors='strict'))
-        except:
-            print("密钥不正确或者加密内容损坏 放弃token")
+        except Exception as e:
+            print(f"密钥不正确或者加密内容损坏，放弃已保存的 token 文件: {e}")
             return dict()
     else:
         return dict()
@@ -371,17 +359,20 @@ def reset_daily_steps(user_tokens: dict, log_reset_hour: int = 6, log_reset_wind
         current_date_str = time_bj.strftime("%Y-%m-%d")
         is_in_log_window = log_reset_hour <= time_bj.hour < log_reset_window_end_hour 
 
-        for user, info in user_tokens.items():
+        for user, info in list(user_tokens.items()):
             last_reset_date = info.get("last_reset_date")
             
             if last_reset_date != current_date_str:
-                needs_reset = (info.get("last_step", 0) != 0) or (last_reset_date is None) 
+                needs_reset = False
                 try:
+                    if info.get("last_step") is not None and int(info.get("last_step")) != 0:
+                        needs_reset = True
+                except (ValueError, TypeError):
+                    needs_reset = True
+                
+                if needs_reset or last_reset_date is None:
                     info["last_step"] = 0 
                     info["last_reset_date"] = current_date_str
-                    changed = True
-                except:
-                    user_tokens[user] = {"last_step": 0, "last_reset_date": current_date_str}
                     changed = True
 
         if changed:
@@ -400,7 +391,7 @@ def reset_daily_steps(user_tokens: dict, log_reset_hour: int = 6, log_reset_wind
             if is_in_log_window:
                 print(f"[{time_bj.strftime('%H:%M')}] 重置检查：所有账号 last_step 已为 0 且今日已重置，或当前已在重置窗口内但无需操作。")
             else:
-                print(f"[{time_bj.strftime('%H:%M')}] 重置检查：今日已重置过，无需再次操作。")
+                 print(f"[{time_bj.strftime('%H:%M')}] 重置检查：今日已重置过，无需再次操作（当前不在重置窗口）。")
 
     except Exception as e:
         print(f"执行 reset_daily_steps 异常: {e}")
@@ -411,16 +402,20 @@ if __name__ == "__main__":
     time_bj = get_beijing_time()
     encrypt_support = False
     user_tokens = dict()
-    if os.environ.__contains__("AES_KEY") is True:
-        aes_key = os.environ.get("AES_KEY")
-        if aes_key is not None:
-            aes_key = aes_key.encode('utf-8')
-            if len(aes_key) == 16:
-                encrypt_support = True
-        if encrypt_support:
+    aes_key = None
+
+    # AES Key处理
+    if os.environ.__contains__("AES_KEY") and os.environ.get("AES_KEY"):
+        aes_key = os.environ.get("AES_KEY").encode('utf-8')
+        if len(aes_key) == 16:
+            encrypt_support = True
             user_tokens = prepare_user_tokens()
         else:
-            print("AES_KEY未设置或无效，无法使用加密保存功能")
+            print("AES_KEY长度不为16字节，无法使用加密保存功能")
+    else:
+        print("AES_KEY未设置，无法使用加密保存功能")
+
+    # CONFIG处理
     if os.environ.__contains__("CONFIG") is False:
         print("未配置CONFIG变量，无法执行")
         exit(1)
@@ -428,37 +423,44 @@ if __name__ == "__main__":
         # region 初始化参数
         config = dict()
         try:
-            config = dict(json.loads(os.environ.get("CONFIG")))
-        except:
-            print("CONFIG格式不正确，请检查Secret配置，请严格按照JSON格式：使用双引号包裹字段和值，逗号不能多也不能少")
+            config = json.loads(os.environ.get("CONFIG")) # Removed unnecessary dict() conversion
+        except Exception as e:
+            print(f"CONFIG格式不正确，请检查Secret配置，请严格按照JSON格式：使用双引号包裹字段和值，逗号不能多也不能少。错误: {e}")
             traceback.print_exc()
             exit(1)
-
-
+        
         # 配置变量
+        TELEGRAM_TOKEN = config.get('TELEGRAM_TOKEN')
+        TELEGRAM_CHAT_ID = config.get('TELEGRAM_CHAT_ID')
+
         PUSH_PLUS_TOKEN = config.get('PUSH_PLUS_TOKEN')
-        PUSH_PLUS_HOUR = config.get('PUSH_PLUS_HOUR')
         PUSH_PLUS_MAX = get_int_value_default(config, 'PUSH_PLUS_MAX', 30)
+        
         sleep_seconds = config.get('SLEEP_GAP')
-        if sleep_seconds is None or sleep_seconds == '':
+        if sleep_seconds is None or str(sleep_seconds).strip() == '':
             sleep_seconds = 5
-        sleep_seconds = float(sleep_seconds)
+        try:
+            sleep_seconds = float(sleep_seconds)
+        except ValueError:
+            print(f"SLEEP_GAP配置'{sleep_seconds}'无效，使用默认值5秒。")
+            sleep_seconds = 5.0
+
         users = config.get('USER')
         passwords = config.get('PWD')
         if users is None or passwords is None:
             print("未正确配置账号密码，无法执行")
             exit(1)
 
+        PUSH_REPORT_HOUR = get_int_value_default(config, 'PUSH_REPORT_HOUR', -1)
+
         min_step, max_step = get_min_max_by_time()
+        
         use_concurrent = config.get('USE_CONCURRENT')
-        if use_concurrent is not None and use_concurrent == 'True':
+        if use_concurrent is not None and str(use_concurrent).lower() == 'true':
             use_concurrent = True
         else:
-            print(f"多账号执行间隔：{sleep_seconds}")
+            print(f"多账号执行间隔：{sleep_seconds}秒")
             use_concurrent = False
-
-        TELEGRAM_TOKEN = config.get('TELEGRAM_TOKEN')
-        TELEGRAM_CHAT_ID = config.get('TELEGRAM_CHAT_ID')
 
         reset_daily_steps(user_tokens)
 
@@ -466,24 +468,30 @@ if __name__ == "__main__":
 
         # 执行主流程
         exec_results = []
-        if len(users.split('#')) == len(passwords.split('#')):
-            idx, total = 0, len(users.split('#'))
+        user_list = users.split('#')
+        password_list = passwords.split('#')
+        total = len(user_list)
+
+        if total == len(password_list):
             if use_concurrent:
                 import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    exec_results = list(executor.map(lambda x: run_single_account(total, x[0], *x[1]), enumerate(zip(users.split('#'), passwords.split('#')))))
+                with concurrent.futures.ThreadPoolExecutor(max_workers=min(total, os.cpu_count() or 1)) as executor:
+                    exec_results = list(executor.map(lambda x: run_single_account(total, x[0], x[1][0], x[1][1]), enumerate(zip(user_list, password_list))))
             else:
-                for user_mi, passwd_mi in zip(users.split('#'), passwords.split('#')):
+                for idx, (user_mi, passwd_mi) in enumerate(zip(user_list, password_list)):
                     exec_results.append(run_single_account(total, idx, user_mi, passwd_mi))
-                    idx += 1
-                    if idx < total:
+                    if idx < total - 1:
                         time.sleep(sleep_seconds)
         else:
-            print(f"账号数长度[{len(users.split('#'))}]和密码数长度[{len(passwords.split('#'))}]不匹配，跳过执行")
+            print(f"账号数长度[{total}]和密码数长度[{len(password_list)}]不匹配，跳过执行")
             exit(1)
 
         if encrypt_support:
-            persist_user_tokens()
+            try:
+                persist_user_tokens()
+            except Exception as e:
+                print(f"持久化token失败：{e}")
+
 
         success_count = 0
         push_results = []
@@ -492,25 +500,33 @@ if __name__ == "__main__":
             if result['success'] is True:
                 success_count += 1
 
-        summary = f"\n执行账号总数{total}，成功：{success_count}，失败：{total - success_count}"
+        current_hour_bj = time_bj.hour 
+        should_push = (PUSH_REPORT_HOUR == -1) or (current_hour_bj == PUSH_REPORT_HOUR)
 
-        # 推送 PushPlus 及 Telegram
-        push_to_push_plus(push_results, summary)
-        if TELEGRAM_TOKEN is not None and TELEGRAM_CHAT_ID is not None:
-            telegram_lines_to_send = []
+        if should_push:
+            summary_msg = f"\n执行账号总数{total}，成功：{success_count}，失败：{total - success_count}"
             
-            telegram_lines_to_send.append(f"<b>{escape_html('步数增加-执行摘要')}</b>\n")
-            telegram_lines_to_send.append(f"<b>总计</b>: {escape_html(str(total))} | <b>成功</b>: {escape_html(str(success_count))} | <b>失败</b>: {escape_html(str(total - success_count))}\n")
-            
-            if len(exec_results) >= PUSH_PLUS_MAX:
-                telegram_lines_to_send.append(escape_html("账号数量过多，详细情况请前往 GitHub Actions 中查看\n"))
-            else:
-                telegram_lines_to_send.append(f"<b>{escape_html('详细结果')}</b>\n")
-                for result in exec_results:
-                    user_esc = escape_html(desensitize_user_name(result['user']))
-                    reason_esc = escape_html(result['msg']) 
-                    status_emoji = "✅" if result['success'] else "❌"
-                    telegram_lines_to_send.append(
-                        f"{status_emoji} <b>账号</b>: {user_esc} -> {reason_esc}\n"
-                    )
-            push_to_telegram("步数通知", telegram_lines_to_send)
+            # 推送 PushPlus
+            push_to_push_plus(push_results, summary_msg)
+
+            # 推送 Telegram
+            if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
+                telegram_lines_to_send = []
+                
+                telegram_lines_to_send.append(f"<b>{escape_html('步数增加-执行摘要')}</b>\n")
+                telegram_lines_to_send.append(f"<b>总计</b>: {escape_html(str(total))} | <b>成功</b>: {escape_html(str(success_count))} | <b>失败</b>: {escape_html(str(total - success_count))}\n")
+                
+                if len(exec_results) >= PUSH_PLUS_MAX:
+                    telegram_lines_to_send.append(escape_html("账号数量过多，详细情况请前往 GitHub Actions 中查看\n"))
+                else:
+                    telegram_lines_to_send.append(f"<b>{escape_html('详细结果')}</b>\n")
+                    for result in exec_results:
+                        user_esc = escape_html(desensitize_user_name(result['user']))
+                        reason_esc = escape_html(result['msg']) 
+                        status_emoji = "✅" if result['success'] else "❌"
+                        telegram_lines_to_send.append(
+                            f"{status_emoji} <b>账号</b>: {user_esc} -> {reason_esc}\n"
+                        )
+                push_to_telegram("步数通知", telegram_lines_to_send)
+        else:
+            print(f"当前北京时间 {time_bj.strftime('%H:%M')}，不满足配置的推送小时 PUSH_REPORT_HOUR={PUSH_REPORT_HOUR} 的要求，跳过消息推送。")
