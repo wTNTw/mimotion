@@ -146,10 +146,14 @@ def push_results(exec_results, summary, config: PushConfig):
 
 def not_in_push_time_range(config: PushConfig) -> bool:
     """检查是否在推送时间范围内"""
-    if not config.push_plus_hour:
-        return False  # 如果没有设置推送时间，则总是推送
-
+    # 优先检查是否已到每日北京时间22点（含）之后，未到则不推送
     time_bj = get_beijing_time()
+    if time_bj.hour < 22:
+        print(f"当前北京时间为：{time_bj.strftime('%Y-%m-%d %H:%M:%S')}，未到每日22点，跳过推送")
+        return True
+
+    if not config.push_plus_hour:
+        return False  # 如果没有设置推送时间，则在22点之后总是推送
 
     # 首先根据时间判断，如果匹配 直接返回
     if config.push_plus_hour.isdigit():
